@@ -2,7 +2,7 @@
  *
  *  Twinkly Device Handler
  *
- *  Copyright 2019 Steven Jon Smith
+ *  Copyright 2020 Steven Jon Smith with Modifications by Jonathon Bischof 
  *
  *  Please read carefully the following terms and conditions and any accompanying documentation
  *  before you download and/or use this software and associated documentation files (the "Software").
@@ -76,20 +76,29 @@ metadata {
 def installed()
 {
  	unschedule()
+    runEvery1Minute(refresh)
  	runEvery5Minutes(poll)
- 	runIn(2, poll)
+    login()
+ 	runIn(4, poll)
+}
+
+def refresh ()
+{
+	sendHubCommand(login())
 }
 
 def updated()
 {
+	log.debug "Updated..."
  	unschedule()
+    runEvery1Minute(refresh)
  	runEvery5Minutes(poll)
- 	runIn(2, poll)
+    login()
+ 	runIn(4, poll)
 }
 
 def poll()
 {
-	login()
     sendHubCommand(createAction("query", "led/mode"))
     sendHubCommand(createAction("query", "led/out/brightness"))
 }
@@ -97,28 +106,37 @@ def poll()
 def on()
 {
 	log.debug "Executing 'On'"
-	login()
+
     sendHubCommand(createAction("action", "led/mode", "{\"mode\":\"movie\"}"))
 }
 
 def off()
 {
 	log.debug "Executing 'Off'"
-	login()
+
     sendHubCommand(createAction("action", "led/mode", "{\"mode\":\"off\"}"))
 }
 
 def setLevel(brightness) {
 	log.debug "Executing 'setLevel'"
-	login()
+    state.level = brightness
     sendHubCommand(createAction("action", "led/out/brightness", "{\"value\":${brightness},\"type\":\"A\",\"mode\":\"enabled\"}"))
 }
 
 def login() {
+	log.debug "Login() called"
 	sendHubCommand(createAction("auth"))
-    pause(1000)
-    sendHubCommand(createAction("verify"))
     pause(500)
+    sendHubCommand(createAction("verify"))
+    pause(250)
+}
+
+def verify() {
+	sendHubCommand(createAction("verify"))
+}
+
+def check() {
+
 }
 
 def reset() {
@@ -172,6 +190,7 @@ def createAction(String cmd, String endpoint = null, body = null) {
 }
 
 def parse(output) {
+
 	log.debug "Starting response parsing on ${output}"
 
 	def headers = ""
@@ -188,11 +207,19 @@ def parse(output) {
     def data = msg.data              // => either JSON or XML in response body (whichever is specified by content-type header in response)
 
 	log.debug "headers: ${headerMap}, status: ${status}, body: ${body}, data: ${data}"
-    
-    body = new groovy.json.JsonSlurper().parseText(body)
-    log.debug "$body"
+    log.debug "TESTING : $body"
+    if (body != "Invalid Token") { 
+    	body = new groovy.json.JsonSlurper().parseText(body)
+    } else {
+    	log.error "Invalid Token, returning L213, parse"
+    	return;
+    }
     
     if (status == 200) {
+    	if (body == "Invalid Token") {
+        	log.debug "Invalid Token"
+        	return 0;
+        }
     	if (body.containsKey("authentication_token")) {
    			def token = null
             token = body['authentication_token']
