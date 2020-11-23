@@ -1,7 +1,7 @@
 /**
  *  Twinkly Device Creator
  *
- *  Copyright 2019 Steven Jon Smith
+ *  Copyright 2020 Steven Jon Smith with Modifications by Jonathon Bischof
  *
  *  Please read carefully the following terms and conditions and any accompanying documentation
  *  before you download and/or use this software and associated documentation files (the "Software").
@@ -42,9 +42,6 @@ definition(
 
 preferences {
 	page(name: "addDevice", title: "Create Twinkly Device", install: true, uninstall: true) {
-        section("Which hub shares the same network as the Twinkly device?") {
-        	input name: "installHub", type: "hub", required: true
-        }
 		section("IP address of Twinkly device:") {
             input "deviceIP", "text", required: true
         }
@@ -61,24 +58,22 @@ def installed() {
 
 def updated() {
 	log.debug "Updated with settings: ${settings}"
-
 	initialize()
 }
 
 def initialize() {
     addDevice()
-
     log.debug "Application Initialized"
 }
 
-def addDevice() { 
+def addDevice() {
     def ipAddressHex = convertIPToHex(deviceIP)
     def ipAddress = convertHexToIP(ipAddressHex)
 
     def dni = "${ipAddressHex}:${convertPortToHex(80)}"
     def d = getChildDevice(dni)
     if(!d) {
-        log.debug "Hub: " + installHub.id
+        //log.debug "Hub: " + installHub.id
         
         d = getAuthToken(dni)
     } else {
@@ -91,7 +86,7 @@ def createChild() {
 	def dni = "${ipAddressHex}:${convertPortToHex(80)}"
     
     try {
-        addChildDevice("StevenJonSmith", "Twinkly Device", dni, installHub.id, 
+        addChildDevice("StevenJonSmith", "Twinkly Device", dni, null, 
                        [
                            name: "Twinkly Device", 
                            label: "$deviceName", 
