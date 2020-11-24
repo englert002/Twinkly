@@ -42,6 +42,10 @@ definition(
 
 preferences {
 	page(name: "addDevice", title: "Create Twinkly Device", install: true, uninstall: true) {
+    	/*section("Hub Selection") {
+        	paragraph title: "", "Multiple SmartThings Hubs have been detected at this location. Please select the Hub."
+            input name: "installHub", type: "hub", title: "Select the Hub", required: true
+        }*/
 		section("IP address of Twinkly device:") {
             input "deviceIP", "text", required: true
         }
@@ -82,11 +86,12 @@ def addDevice() {
 }
 
 def createChild() {
+	def physicalHubs = location.hubs.findAll { it.type == physicalgraph.device.HubType.PHYSICAL } // Ignore Virtual hubs
 	def ipAddressHex = convertIPToHex(deviceIP)
 	def dni = "${ipAddressHex}:${convertPortToHex(80)}"
     
     try {
-        addChildDevice("StevenJonSmith", "Twinkly Device", dni, null, 
+        addChildDevice("StevenJonSmith", "Twinkly Device", dni, (physicalHubs.size() > 1 ? installHub.id : physicalHubs[0].id), 
                        [
                            name: "Twinkly Device", 
                            label: "$deviceName", 
