@@ -2,7 +2,7 @@
  *
  *  Twinkly Device Handler
  *
- *  Copyright 2020 Steven Jon Smith with Modifications by Jonathon Bischof 
+ *  Copyright 2020 Steven Jon Smith with Modifications by Jonathon Bischof and Andrew Hunt
  *
  *  Please read carefully the following terms and conditions and any accompanying documentation
  *  before you download and/or use this software and associated documentation files (the "Software").
@@ -40,7 +40,7 @@ metadata {
         capability "Switch Level"
         
         attribute "authToken", "string"
-        attribute "authTimeout", "number"
+        attribute "authVerified", "boolean"
 	}
     
     preferences {
@@ -76,63 +76,129 @@ metadata {
 def installed()
 {
  	unschedule()
-    runEvery1Minute(refresh)
+    runEvery1Hour(login)
  	runEvery5Minutes(poll)
     login()
  	runIn(4, poll)
-}
-
-def refresh ()
-{
-	sendHubCommand(login())
 }
 
 def updated()
 {
 	log.debug "Updated..."
- 	unschedule()
-    runEvery1Minute(refresh)
- 	runEvery5Minutes(poll)
-    login()
- 	runIn(4, poll)
+    installed()
+}
+
+def refresh()
+{
+	log.debug "Refreshed..."
+	poll()
 }
 
 def poll()
 {
-    sendHubCommand(createAction("query", "led/mode"))
-    sendHubCommand(createAction("query", "led/out/brightness"))
+	if (!device.currentValue("authVerified")) {
+    	log.debug "Auth not verified, delaying poll."
+        return
+    }
+    
+    sendHubCommand(createAction("query", "summary", null, xledSummaryCallback))
 }
 
 def on()
 {
 	log.debug "Executing 'On'"
-
-    sendHubCommand(createAction("action", "led/mode", "{\"mode\":\"movie\"}"))
+    sendHubCommand(createAction("action", "led/mode", "{\"mode\":\"movie\"}", xledModePostCallback))
 }
 
 def off()
 {
 	log.debug "Executing 'Off'"
-
-    sendHubCommand(createAction("action", "led/mode", "{\"mode\":\"off\"}"))
+    sendHubCommand(createAction("action", "led/mode", "{\"mode\":\"off\"}", xledModePostCallback))
 }
 
 def setLevel(brightness) {
 	log.debug "Executing 'setLevel'"
     state.level = brightness
-    sendHubCommand(createAction("action", "led/out/brightness", "{\"value\":${brightness},\"type\":\"A\",\"mode\":\"enabled\"}"))
+    sendHubCommand(createAction("action", "led/out/brightness", "{\"value\":${brightness},\"type\":\"A\",\"mode\":\"enabled\"}", xledModePostCallback))
+}
+
+def xledModePostCallback(output) {
+	def ret = parse(output)
+    if (ret["code"] != 0) {
+    	log.error "Failed to post xled change"
+       	return
+    }
+    
+    poll()
+}
+
+def xledSummaryCallback(output) {
+	log.debug "xledModeCallback called!"
+    
+	def ret = parse(output)
+    def body = ret['json']
+    
+    log.debug body
+    
+    def mode = body['led_mode']['mode']
+	if (mode == "off" || mode == "disabled") {
+        sendEvent(name:'switch', value:"off", displayed:true)
+    } else {
+        sendEvent(name:'switch', value:"on", displayed:true)
+    }
+    
+    for (filter in body['filters']) {
+    	if (filter['filter'] == 'brightness') {
+        	def brightness = filter['config']['value']
+            sendEvent(name:'level', value:brightness, displayed:true)
+        }
+    }
 }
 
 def login() {
 	log.debug "Login() called"
-	sendHubCommand(createAction("auth"))
-    pause(500)
-    sendHubCommand(createAction("verify"))
-    pause(250)
+	sendHubCommand(createAction("auth", null, null, loginCallback))
+}
+
+def loginCallback(output) {
+    log.debug "Login callback called!"
+    
+    def ret = parse(output)
+
+    if (ret['code'] != 0) {
+    	log.error "Failed to login"
+        return
+    }
+    
+    if (ret['json'].containsKey("authentication_token")) {
+        def token = null
+        token = ret['json']['authentication_token']
+
+        if (token != null && token != "") {
+            log.debug "Auth Token: $token"
+            sendEvent(name:'authToken', value:token, displayed:false)
+            sendEvent(name:'authVerified', value:false, displayed:false)
+
+            verify()
+        }
+    }
 }
 
 def verify() {
-	sendHubCommand(createAction("verify"))
+	log.debug "Verify() called after login"
+	sendHubCommand(createAction("verify", null, null, verifyCallback))
+}
+
+def verifyCallback(output) {
+	log.debug "Verify callback called!"
+    
+    def ret = parse(output)
+    if (ret['code'] != 0) {
+    	log.error "Failed to validate auth token"
+    } else {
+    	log.debug "Successfully validated auth token"
+    	sendEvent(name:'authVerified', value:true, displayed:false)
+    }
 }
 
 def check() {
@@ -143,7 +209,7 @@ def reset() {
 	sendHubCommand(createAction("action", "led/reset"))
 }
 
-def createAction(String cmd, String endpoint = null, body = null) {
+def createAction(String cmd, String endpoint = null, body = null, callbackMethod = parse) {
     def path = "/xled/v1/"
     def httpRequest = [
         headers: [
@@ -179,7 +245,7 @@ def createAction(String cmd, String endpoint = null, body = null) {
     
     try 
     {
-    	def hubAction = new physicalgraph.device.HubAction(httpRequest, device.deviceNetworkId, [callback: parse])
+    	def hubAction = new physicalgraph.device.HubAction(httpRequest, device.deviceNetworkId, [callback: callbackMethod])
         log.debug "Created action: $hubAction"
         return hubAction
     }
@@ -190,58 +256,43 @@ def createAction(String cmd, String endpoint = null, body = null) {
 }
 
 def parse(output) {
-
 	log.debug "Starting response parsing on ${output}"
-
-	def headers = ""
+    
+    def headers = ""
 	def parsedHeaders = ""
     
     def msg = output
+    
+    def ret = [:]
+    ret['code'] = -1
+    ret['output'] = msg
 
-    def headersAsString = msg.header // => headers as a string
-    def headerMap = msg.headers      // => headers as a Map
-    def body = msg.body   // => request body as a string
-    def status = msg.status          // => http status code of the response
-    def json = msg.json              // => any JSON included in response body, as a data structure of lists and maps
-    def xml = msg.xml                // => any XML included in response body, as a document tree structure
-    def data = msg.data              // => either JSON or XML in response body (whichever is specified by content-type header in response)
-
-	log.debug "headers: ${headerMap}, status: ${status}, body: ${body}, data: ${data}"
-    log.debug "TESTING : $body"
+    def body = msg.body
+    
     if (body != "Invalid Token") { 
     	body = new groovy.json.JsonSlurper().parseText(body)
+        ret['json'] = body
     } else {
     	log.error "Invalid Token, returning L213, parse"
-    	return;
+        ret['code'] = -2
+        
+        login()
+    	return ret
     }
     
-    if (status == 200) {
-    	if (body == "Invalid Token") {
-        	log.debug "Invalid Token"
-        	return 0;
-        }
-    	if (body.containsKey("authentication_token")) {
-   			def token = null
-            token = body['authentication_token']
-
-            if (token != null && token != "") {
-                log.debug "Auth Token: $token"
-                sendEvent(name:'authToken', value:token, displayed:false)
-    		}
-        }
-        if (body.containsKey("mode") && !body.containsKey("value")) {
-        	if (body['mode'] == "off" || body['mode'] == "disabled") {
-            	sendEvent(name:'switch', value:"off", displayed:true)
-            } else {
-            	sendEvent(name:'switch', value:"on", displayed:true)
-            }
-        }
-        if (body.containsKey("value")) {
-            sendEvent(name:'level', value:body['value'], displayed:true)
-        }
-    } else {
-    	log.debug "Unable to locate device on your network"
+    if (body == "Invalid Token") {
+        log.error "Invalid Token, returning L213, parse"
+        ret['code'] = -2
+        return ret
     }
+    
+    if (body['code'] == 1000) {
+        ret['code'] = 0
+        return ret
+    }
+    
+    log.debug "Unable to locate device on your network"
+    return ret
 }
 
 private def generateChallenge() {
